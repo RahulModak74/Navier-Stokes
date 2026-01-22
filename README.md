@@ -32,7 +32,7 @@
 **This repository does not claim a resolution of the Clay Millennium Problem in its classical formulation; instead, it explores an alternate notion of existence based on computational constructivism and weak solutions.**
 
 **Reality**: 
-- Likely **NO** for turbulent flows (vortex stretching creates singularities)
+- vortex stretching creates singularities
 - Classical PDE solvers **break** at discontinuities
 - Finite difference/spectral methods require smoothness
 
