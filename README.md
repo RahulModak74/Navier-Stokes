@@ -350,7 +350,7 @@ pyro.sample("obs", dist.Normal(zero, scale), obs=data)
 
 **We're not claiming to solve the classical Clay problem.**
 
-**We're proposing it asks the WRONG QUESTION.**
+**We're proposing it asks a different QUESTION.**
 
 For turbulent flows:
 - Smooth solutions may not exist (vortex singularities inevitable)
