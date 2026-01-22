@@ -53,7 +53,7 @@ Ours:      Learn M ⊂ W^{1,p}(Ω)  → Manifold allows singularities
 Please check the png file in the repo (can be derived with steps outlined below)
 acceptable_discontinuity_learning.png
 
-### Proven Computationally
+### Demonstrated Computationally
 
 ✅ **Weak solutions with singularities exist** (on learned manifold)  
 ✅ **Low-dimensional structure** (latent dim=16 << data dim≈1000)  
