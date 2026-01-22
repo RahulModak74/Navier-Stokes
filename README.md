@@ -11,7 +11,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![Pyro](https://img.shields.io/badge/Pyro-1.8+-orange.svg)](https://pyro.ai/)
 
-**Rahul Modak** (Bayesian Cybersecurity Pvt Ltd) · **Rahul Walawalkar** (Bayesian CyberSecurity)
+**Rahul Modak** (Bayesian Cybersecurity Pvt Ltd) · **Dr Rahul Walawalkar** (Bayesian CyberSecurity)
 
 ---
 
