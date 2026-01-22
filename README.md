@@ -324,32 +324,7 @@ pyro.sample("obs", dist.Normal(zero, scale), obs=data)
 
 ---
 
-## 📚 Repository Structure
 
-```
-bayesian-ns-solver/
-├── README.md                    # This file
-├── LICENSE                      # MIT License
-├── CITATION.bib                 # How to cite
-├── requirements.txt             # Dependencies
-│
-├── src/
-│   ├── ns_toy_data_generator.py          # Generate discontinuous data
-│   ├── ns_toy_vae_pyro_trainer_GPU.py    # GPU-accelerated trainer
-│   ├── ns_toy_vae_pyro_trainer_FIXED.py  # CPU version
-│   └── ns_toy_visualizer_FIXED.py        # Visualization
-│
-├── scripts/
-│   ├── run_complete_pipeline.sh          # Full automation
-│   ├── run_gpu_training.sh               # Quick GPU training
-│   └── test_gpu_fix.py                   # Verify setup
-│
-└── docs/
-    ├── FRAMEWORK.md                       # Complete theory
-    ├── GPU_GUIDE.md                       # GPU training guide
-    ├── VISUALIZATION_GUIDE.md             # Interpret results
-    └── architecture_diagram.png           # System diagram
-```
 
 ---
 
