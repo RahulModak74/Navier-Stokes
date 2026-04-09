@@ -24,6 +24,7 @@
 
 **Core Innovation**: We don't seek smooth C² solutions. We **learn the manifold** of weak solutions in **Banach space W^{1,p}** using **Bayesian VAEs** with physics-informed priors.
 
+Pl note that Banach space is conceptual for MW framework.
 
 ### The Problem
 
