@@ -30,6 +30,14 @@ class NSToyDataGenerator:
         
         # Set random seed
         np.random.seed(seed)
+
+        # FIX 7: burst locations fixed ONCE. Previously velocity_field() called
+        # np.random.random() internally, so it was not a function of (x,y,t).
+        # The finite-difference gradient then compared two *different* fields and
+        # produced spurious ~500 gradients read as physical singularities.
+        self.burst_locs = np.random.uniform(-0.9, 0.9, size=24)
+        self.burst_amps = np.random.uniform(0.3, 0.7, size=24)
+        self.burst_width = 0.1
         
         print(f"Navier-Stokes Toy System Parameters:")
         print(f"  Reynolds number: Re = {Re}")
@@ -61,22 +69,17 @@ class NSToyDataGenerator:
         else:
             u_vortex = 0.0
         
-        # DISCONTINUITY 2: Turbulent bursts (random spikes)
+        # DISCONTINUITY 2: Turbulent bursts (FIX 7 -- deterministic in x)
+        u_burst = 0.0
         if self.Re > 2 * self.critical_Re:
-            # Random sharp gradients (simulating turbulent bursts)
-            burst_prob = 0.05
-            if np.random.random() < burst_prob:
-                # Sharp, localized spike (delta-like)
-                spike_loc = np.random.uniform(-0.9, 0.9)
-                spike_width = 0.1
-                u_burst = 0.5 * np.exp(-(x - spike_loc)**2 / (2 * spike_width**2))
-                # Make it non-smooth: sudden cutoff
-                if abs(x - spike_loc) > spike_width:
-                    u_burst = 0.0
-            else:
-                u_burst = 0.0
-        else:
-            u_burst = 0.0
+            for loc, amp in zip(self.burst_locs, self.burst_amps):
+                d = x - loc
+                if abs(d) <= self.burst_width:
+                    # Compact support: continuous value, kinked derivative at the
+                    # support edge. A genuine non-differentiable point rather
+                    # than an artefact of the RNG.
+                    u_burst += amp * (np.exp(-d**2 / (2 * self.burst_width**2))
+                                      - np.exp(-0.5))
         
         # Combine all components
         u = u_laminar + u_osc + u_vortex + u_burst
@@ -391,3 +394,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -19,7 +19,7 @@ class NSDiscontinuousPyroVAE(nn.Module):
     Key innovation: Physics constraints as FIRST-CLASS BAYESIAN PRIORS.
     """
     
-    def __init__(self, input_dim=10, latent_dim=16):
+    def __init__(self, input_dim=10, latent_dim=4):
         super().__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -43,10 +43,12 @@ class NSDiscontinuousPyroVAE(nn.Module):
         self.fc_logvar = nn.Linear(64, latent_dim)
         
         # Initialize with small weights for stability
-        nn.init.xavier_uniform_(self.fc_mu.weight, gain=0.01)
-        nn.init.xavier_uniform_(self.fc_logvar.weight, gain=0.01)
+        # FIX 4: gain=0.01 + logvar bias -2.0 + tiny decoder weights pinned the
+        # encoder near a point and let the KL term win (posterior collapse).
+        nn.init.xavier_uniform_(self.fc_mu.weight, gain=1.0)
+        nn.init.xavier_uniform_(self.fc_logvar.weight, gain=0.1)
         nn.init.zeros_(self.fc_mu.bias)
-        nn.init.constant_(self.fc_logvar.bias, -2.0)  # Start with low variance
+        nn.init.constant_(self.fc_logvar.bias, -1.0)
         
         # 3. Decoder: p(x|z) with physical constraints
         self.decoder_net = nn.Sequential(
@@ -60,15 +62,17 @@ class NSDiscontinuousPyroVAE(nn.Module):
             nn.Tanh(),
             nn.LayerNorm(256),
             nn.Linear(256, input_dim),
-            nn.Tanh()  # Final tanh to bound all outputs in [-1, 1]
         )
+        # FIX 1: the old final Tanh() capped every output at |1| while the
+        # normalized targets reach ~+/-10, so any target outside [-1,1] was
+        # unreachable and MSE had a hard floor. Bound wide, not at 1.
+        self.output_scale = 10.0
         
-        # Initialize decoder with very small weights
-        for layer in self.decoder_net:
-            if isinstance(layer, nn.Linear):
-                nn.init.xavier_uniform_(layer.weight, gain=0.01)
-                if layer.bias is not None:
-                    nn.init.zeros_(layer.bias)
+        # FIX 4: removed the gain=0.01 decoder init, which started the model at
+        # "predict zero everywhere" -- a state the KL term was happy to keep.
+
+        # FIX 4: learned per-column observation noise instead of a fixed 0.5.
+        self.log_obs_scale = nn.Parameter(torch.zeros(input_dim))
         
         print(f"\n✓ Created Pyro VAE with:")
         print(f"  • Input dim: {input_dim}")
@@ -154,9 +158,10 @@ class NSDiscontinuousPyroVAE(nn.Module):
         if torch.isnan(z).any():
             z = torch.where(torch.isnan(z), torch.zeros_like(z), z)
         
-        x_recon = self.decoder_net(z)
+        # FIX 1: still bounded (stability), but at the data's actual scale.
+        raw = self.decoder_net(z)
+        x_recon = self.output_scale * torch.tanh(raw / self.output_scale)
         
-        # Output is already bounded by final Tanh in [-1, 1]
         # NaN check
         if torch.isnan(x_recon).any():
             print("⚠️  NaN in decoder output")
@@ -181,7 +186,7 @@ class NSDiscontinuousPyroVAE(nn.Module):
             x_recon = self.decode(z)
             
             # Likelihood: p(x|z) with LARGE scale for robustness
-            x_scale = torch.ones_like(x_recon) * 0.5  # Large observation noise
+            x_scale = self.log_obs_scale.exp().clamp(1e-3, 5.0).expand_as(x_recon)
             
             # NaN protection before creating distribution
             x_recon_safe = torch.where(
@@ -203,18 +208,40 @@ class NSDiscontinuousPyroVAE(nn.Module):
                 divergence = du_dx + dv_dy
                 divergence = torch.clamp(divergence, -20, 20)
                 
+                # FIX 6: obs was scaled by 0.1 against scale 5.0, putting the
+                # residual deep in the flat part of the density -- the prior
+                # contributed almost no gradient. Tightened, no 0.1 factor.
                 pyro.sample(
                     "incompressibility_obs",
-                    dist.Normal(0.0, 5.0).expand([batch_size]),  # Very large scale
-                    obs=divergence * 0.1
+                    dist.Normal(0.0, 0.5).expand([batch_size]),
+                    obs=divergence
                 )
                 
                 # PRIOR 2: Momentum (heavy tails)
-                accel = torch.clamp(torch.abs(u * du_dx + v * du_dx), 0, 20)
+                # FIX 5: was u*du_dx + v*du_dx -- du_dx twice, dv_dy unused.
+                # NB the true advection term needs du_dy, which the 10-column
+                # data does not carry; this is the closest the data supports.
+                accel = torch.clamp(torch.abs(u * du_dx + v * dv_dy), 0, 20)
                 pyro.sample(
                     "momentum_obs",
-                    dist.Laplace(0.0, 5.0).expand([batch_size]),
-                    obs=accel * 0.1
+                    dist.Laplace(0.0, 0.5).expand([batch_size]),
+                    obs=accel
+                )
+                # FIX 6: priors 3 and 4 were declared in define_physics_priors()
+                # but never sampled here, so the StudentT heavy-tail mechanism --
+                # the headline claim of the README -- was not in the executed path.
+                omega = torch.clamp(x_recon[:, 6], -20, 20)
+                pyro.sample(
+                    "vorticity_obs",
+                    dist.StudentT(2.0, 0.0, 1.0).expand([batch_size]),
+                    obs=omega
+                )
+
+                p_field = torch.clamp(x_recon[:, 5], -20, 20)
+                pyro.sample(
+                    "pressure_obs",
+                    dist.Normal(0.0, 1.0).expand([batch_size]),
+                    obs=p_field
                 )
     
     def guide(self, x=None):
@@ -290,8 +317,10 @@ def preprocess_data(data, max_gradient=10.0, max_value=5.0):
     
     # STEP 3: Clip extreme values for numerical stability
     # Keep discontinuity flag (last column) as is
-    data_clean[:, :-1] = np.clip(data_clean[:, :-1], -max_value, max_value)
-    print(f"✓ Clipped values to ±{max_value} (except discontinuity flag)")
+    # FIX 2: this clip ran BEFORE normalization, so vortex cores (omega up to
+    # ~2e5 from 0.2/(r+1e-6)) all collapsed onto the same number and magnitude
+    # information was destroyed. Normalize first, compress after.
+    print(f"✓ Pre-normalization clip disabled (was ±{max_value}) — see FIX 2")
     
     # STEP 4: Robust normalization (per column)
     print(f"\nNormalizing data (column-wise)...")
@@ -300,10 +329,13 @@ def preprocess_data(data, max_gradient=10.0, max_value=5.0):
     
     # Don't normalize the discontinuity flag (last column)
     data_normalized = (data_clean - data_mean) / data_std
+
+    # FIX 2: signed log compression keeps ordering AND relative magnitude of the
+    # extremes rather than flattening them all onto a clip bound.
+    # Inverse: sign(y) * (exp(|y|) - 1) * data_std + data_mean
+    data_normalized = np.sign(data_normalized) * np.log1p(np.abs(data_normalized))
+
     data_normalized[:, -1] = data_clean[:, -1]  # Restore flag
-    
-    # Final safety check
-    data_normalized = np.clip(data_normalized, -10, 10)  # Prevent extreme normalized values
     
     print(f"\n✓ Data preprocessing complete:")
     print(f"  • Clean data shape: {data_normalized.shape}")
@@ -406,6 +438,15 @@ def test_discontinuity_learning(vae, data_tensor):
         
         print(f"\n1. Reconstruction quality:")
         print(f"   MSE: {mse:.6f}")
+        # DIAGNOSTIC: the only number that decides whether the model works.
+        _d = data_tensor[:1000]
+        _baseline = torch.mean((_d - _d.mean(0, keepdim=True))**2).item()
+        print(f"   Predict-the-mean baseline MSE: {_baseline:.6f}")
+        print(f"   Ratio MSE/baseline: {mse/_baseline:.3f}  (<1.0 = learning)")
+        _kl = (-0.5 * (1 + logvar - mu.pow(2) - logvar.exp())).mean(0)
+        print(f"   latent mu per-dim std: {mu.std(0).detach().cpu().numpy().round(3)}")
+        print(f"   latent KL per-dim    : {_kl.detach().cpu().numpy().round(3)}")
+        print(f"   (dims with std<0.1 and KL~0 are dead)")
         
         # Check latent space
         latent_std = torch.std(mu, dim=0).mean().item()
@@ -429,7 +470,8 @@ def main():
     )
     parser.add_argument('--data', type=str, required=True, help='Path to .npy data file')
     parser.add_argument('--epochs', type=int, default=500, help='Training epochs (default: 500)')
-    parser.add_argument('--latent-dim', type=int, default=16, help='Latent dimension')
+    parser.add_argument('--latent-dim', type=int, default=4,
+                        help='Latent dimension (FIX 3: must be < input_dim=10)')
     parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate (default: 5e-4)')
     parser.add_argument('--batch-size', type=int, default=128, help='Batch size (default: 128)')
     parser.add_argument('--save-model', type=str, default='ns_toy_pyro_vae_FIXED.pth')
@@ -500,3 +542,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

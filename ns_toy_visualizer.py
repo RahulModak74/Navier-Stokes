@@ -22,7 +22,7 @@ warnings.filterwarnings('ignore')
 class SimpleVAE(nn.Module):
     """Simplified VAE matching the trained architecture"""
     
-    def __init__(self, input_dim=10, latent_dim=16):
+    def __init__(self, input_dim=10, latent_dim=4):
         super().__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
@@ -54,8 +54,15 @@ class SimpleVAE(nn.Module):
             nn.Tanh(),
             nn.LayerNorm(256),
             nn.Linear(256, input_dim),
-            nn.Tanh()  # Final Tanh to bound outputs
         )
+        # FIX 1 (mirror of trainer): no final Tanh here. The old Tanh had no
+        # parameters, so load_state_dict succeeded silently while the decoder
+        # capped every output at |1| -- reconstructions would look broken with
+        # no error raised. Scale applied in decode() instead.
+        self.output_scale = 10.0
+        # Present in the fixed trainer's state_dict; declared here so
+        # load_state_dict(strict=True) does not reject the checkpoint.
+        self.log_obs_scale = nn.Parameter(torch.zeros(input_dim))
     
     def encode(self, x):
         """Encode with NaN protection"""
@@ -77,7 +84,8 @@ class SimpleVAE(nn.Module):
         if torch.isnan(z).any():
             z = torch.where(torch.isnan(z), torch.zeros_like(z), z)
         
-        x_recon = self.decoder_net(z)
+        raw = self.decoder_net(z)
+        x_recon = self.output_scale * torch.tanh(raw / self.output_scale)
         
         if torch.isnan(x_recon).any():
             x_recon = torch.where(torch.isnan(x_recon), torch.zeros_like(x_recon), x_recon)
@@ -98,7 +106,7 @@ class NSDiscontinuousVisualizer:
             checkpoint = torch.load(model_path, map_location='cpu')
         
         # Get model parameters
-        latent_dim = checkpoint.get('latent_dim', 16)
+        latent_dim = checkpoint.get('latent_dim', 4)
         
         # Load data
         print(f"Loading data: {data_path}")
@@ -124,8 +132,13 @@ class NSDiscontinuousVisualizer:
             
             # Normalize (same as training)
             data_normalized = (data - data_mean) / data_std
+
+            # FIX 2 (mirror of trainer): signed-log compression. Without this the
+            # visualiser feeds a differently-scaled input than the model was
+            # trained on -- a silent mismatch that makes every panel wrong.
+            data_normalized = np.sign(data_normalized) * np.log1p(np.abs(data_normalized))
+
             data_normalized[:, -1] = data[:, -1]  # Restore discontinuity flag
-            data_normalized = np.clip(data_normalized, -10, 10)
             
             self.data = torch.tensor(data_normalized, dtype=torch.float32)
         else:
@@ -456,3 +469,4 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
+
